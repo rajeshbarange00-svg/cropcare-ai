@@ -7,10 +7,19 @@ if (!supabaseUrl || !supabaseKey) {
   throw new Error('Supabase frontend configuration is missing')
 }
 
-export const supabase = createClient(supabaseUrl, supabaseKey, {
+const client = createClient(supabaseUrl, supabaseKey, {
   auth: {
     persistSession: true,
     autoRefreshToken: true,
     detectSessionInUrl: true,
+  },
+})
+
+// Keep Supabase methods bound to the real client instance.
+// This prevents minified/runtime contexts from losing `.from()`'s receiver.
+export const supabase = new Proxy(client, {
+  get(target, property, receiver) {
+    const value = Reflect.get(target, property, receiver)
+    return typeof value === 'function' ? value.bind(target) : value
   },
 })
