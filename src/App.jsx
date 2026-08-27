@@ -53,10 +53,10 @@ function App() {
   }, [])
 
   async function loadStages(nextCropId) {
-    setStages([]); setStageId(''); setIssues([]); setIssueId(''); setAdvisories([]); setSearched(false)
+    setStages([]); setStageId(''); setIssues([]); setIssueId(''); setAdvisories([]); setSearched(false); setError('')
     if (!nextCropId) return
     const { data, error: queryError } = await supabase.from('crop_stages')
-      .select('id,crop_id,stage_name_en,stage_name_hi,stage_order')
+      .select('id,crop_id,stage_name,stage_order')
       .eq('crop_id', nextCropId).order('stage_order')
     if (queryError) setError(queryError.message)
     setStages(data ?? [])
@@ -69,10 +69,10 @@ function App() {
     try {
       if (nextType === 'deficiency') {
         const { data, error: e } = await supabase.from('nutrient_deficiencies')
-          .select('id,nutrient_id,name_en,name_hi,description,common_symptoms,verification_status')
-          .eq('verification_status', 'verified').eq('active', true).order('name_en')
+          .select('id,nutrient_id,name,description,common_symptoms,verification_status,active')
+          .eq('verification_status', 'verified').eq('active', true).order('name')
         if (e) throw e
-        setIssues((data ?? []).map((x) => ({ ...x, type: nextType })))
+        setIssues((data ?? []).map((x) => ({ ...x, name_en: x.name, name_hi: x.name, type: nextType })))
       } else {
         const table = nextType === 'disease' ? 'diseases' : nextType === 'pest' ? 'pests' : 'weeds'
         const select = nextType === 'weed'
@@ -92,15 +92,14 @@ function App() {
 
   async function findAdvisaries() {
     setSearched(true); setAdvisories([]); setError('')
-    if (!session) {
-      try { setSession(await ensureSession()) } catch (e) { setError(e?.message || 'Secure session unavailable.'); return }
-    }
-    if (!selectedCrop || !issueType || !issueId) {
-      setError(language === 'hi' ? 'फसल, समस्या प्रकार और समस्या चुनें।' : 'Select crop, issue type and issue.')
-      return
-    }
-    setLoadingAdvisory(true)
     try {
+      const activeSession = session ?? await ensureSession()
+      setSession(activeSession)
+      if (!selectedCrop || !issueType || !issueId) {
+        setError(language === 'hi' ? 'फसल, समस्या प्रकार और समस्या चुनें।' : 'Select crop, issue type and issue.')
+        return
+      }
+      setLoadingAdvisory(true)
       const data = await getAdvisory({ crop: selectedCrop.name_en, issueType, issueId, stageId })
       setAdvisories(Array.isArray(data?.results) ? data.results : [])
     } catch (e) {
@@ -111,7 +110,7 @@ function App() {
   }
 
   const label = (item) => language === 'hi' ? (item?.name_hi || item?.name_en) : item?.name_en
-  const stageLabel = (item) => language === 'hi' ? (item?.stage_name_hi || item?.stage_name_en) : item?.stage_name_en
+  const stageLabel = (item) => language === 'hi' ? (item?.stage_name_hi || item?.stage_name_en || item?.stage_name) : (item?.stage_name_en || item?.stage_name)
   const cropLabel = (item) => language === 'hi' ? (item?.name_hi || item?.name_en) : item?.name_en
 
   return (
@@ -119,7 +118,7 @@ function App() {
       <div className="app-container">
         <header className="topbar">
           <div className="brand"><div className="brand-mark">🌱</div><div><div className="brand-name">CropCare AI</div><div className="brand-tag">Source-backed crop advisory</div></div></div>
-          <div className="topbar-actions"><span className="admin-status-dot" title="Secure session active" /> <button className="lang-toggle" onClick={() => setLanguage(language === 'hi' ? 'en' : 'hi')}>{language === 'hi' ? 'EN' : 'हिं'}</button></div>
+          <div className="topbar-actions"><span className="admin-status-dot" title={session ? 'Secure session active' : 'Preparing secure session'} /> <button className="lang-toggle" onClick={() => setLanguage(language === 'hi' ? 'en' : 'hi')}>{language === 'hi' ? 'EN' : 'हिं'}</button></div>
         </header>
 
         <section className="hero-panel"><div className="hero-copy"><span className="eyebrow">🌾 Verified agriculture knowledge</span><h1>{language === 'hi' ? 'फसल की समस्या का verified समाधान खोजें' : 'Find a verified solution for your crop problem'}</h1><p>{language === 'hi' ? 'सिस्टम केवल verified, source-backed advisory data दिखाता है।' : 'Only verified, source-backed advisory data is displayed.'}</p></div><div className="trust-strip"><span>✓ Verified-only</span><span>✓ Source tracked</span><span>✓ Weather context</span><span>✓ No AI pesticide generation</span></div></section>
@@ -136,7 +135,7 @@ function App() {
           <div className="section-heading spaced"><div><span className="step-label">STEP 2</span><h2>{language === 'hi' ? 'समस्या पहचानें' : 'Identify the issue'}</h2></div></div>
           <div className="issue-types">{ISSUE_TYPES.map(([v, hi, en]) => <button type="button" key={v} className={`issue-chip ${issueType === v ? 'active' : ''}`} onClick={() => { setIssueType(v); loadIssues(cropId, v) }} disabled={!cropId}>{language === 'hi' ? hi : en}</button>)}</div>
           <label className="field full-width"><span>{language === 'hi' ? 'विशिष्ट समस्या' : 'Specific issue'}</span><select value={issueId} onChange={(e) => setIssueId(e.target.value)} disabled={!issueType || loadingIssues}><option value="">{loadingIssues ? 'Loading…' : issues.length ? (language === 'hi' ? 'समस्या चुनें' : 'Choose an issue') : (language === 'hi' ? 'Verified issue उपलब्ध नहीं' : 'No verified issue available')}</option>{issues.map((i) => <option key={i.id} value={i.id}>{label(i)}</option>)}</select></label>
-          <div className="location-note"><div className="location-icon">🌦️</div><div><strong>{language === 'hi' ? 'Weather context' : 'Weather context'}</strong><span>{language === 'hi' ? 'API cached weather मिले तो advisory के साथ context दे सकती है।' : 'Cached weather can be returned alongside the advisory when available.'}</span></div></div>
+          <div className="location-note"><div className="location-icon">🌦️</div><div><strong>Weather context</strong><span>{language === 'hi' ? 'API cached weather मिले तो advisory के साथ context दे सकती है।' : 'Cached weather can be returned alongside the advisory when available.'}</span></div></div>
           <button className="primary-action" type="button" onClick={findAdvisaries} disabled={loadingAdvisory || !cropId || !issueId}>{loadingAdvisory ? 'Searching…' : language === 'hi' ? 'Verified Advisory खोजें →' : 'Get Verified Advisory →'}</button>
         </section>
 
