@@ -9,4 +9,65 @@ if (!supabaseUrl || !supabasePublishableKey) {
   throw new Error('Supabase frontend configuration is missing')
 }
 
-export const supabase = createClient(supabaseUrl, supabasePublishableKey)
+const client = createClient(supabaseUrl, supabasePublishableKey)
+
+let bootstrapPromise = null
+
+async function ensureAnonymousSession() {
+  const { data, error } = await client.auth.getSession()
+  if (error) throw error
+  if (data?.session) return data.session
+
+  const { data: anonData, error: anonError } = await client.auth.signInAnonymously()
+  if (anonError) throw anonError
+  if (!anonData?.session) throw new Error('Unable to create a Supabase session')
+  return anonData.session
+}
+
+function bootstrap() {
+  if (!bootstrapPromise) bootstrapPromise = ensureAnonymousSession().catch((error) => {
+    bootstrapPromise = null
+    throw error
+  })
+  return bootstrapPromise
+}
+
+// Keep the existing Supabase API surface while automatically creating a
+// frictionless anonymous session for farmer-facing JWT-protected functions.
+export const supabase = {
+  ...client,
+  auth: {
+    ...client.auth,
+    async getSession() {
+      return { data: { session: await bootstrap() }, error: null }
+    },
+    async getUser() {
+      await bootstrap()
+      return client.auth.getUser()
+    },
+    onAuthStateChange(callback) {
+      return client.auth.onAuthStateChange(callback)
+    },
+    async signOut() {
+      bootstrapPromise = null
+      return client.auth.signOut()
+    },
+    async signInWithPassword(credentials) {
+      const result = await client.auth.signInWithPassword(credentials)
+      if (!result.error) bootstrapPromise = Promise.resolve(result.data.session)
+      return result
+    },
+    async signInAnonymously() {
+      const result = await client.auth.signInAnonymously()
+      if (!result.error) bootstrapPromise = Promise.resolve(result.data.session)
+      return result
+    },
+  },
+  functions: {
+    ...client.functions,
+    async invoke(...args) {
+      await bootstrap()
+      return client.functions.invoke(...args)
+    },
+  },
+}
