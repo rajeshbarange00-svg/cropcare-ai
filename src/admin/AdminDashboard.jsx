@@ -1,191 +1,166 @@
 import { useEffect, useMemo, useState } from 'react'
 import { supabase } from '../lib/supabase'
 
-const TABS = [
+const sections = [
   ['overview', 'Overview'],
-  ['crops', 'Crops & Stages'],
-  ['issues', 'Issues'],
-  ['inputs', 'Fertilizer & Chemicals'],
+  ['crops', 'Crops'],
+  ['stages', 'Crop Stages'],
+  ['issues', 'Diseases / Pests / Weeds'],
+  ['fertilizers', 'Fertilizers'],
+  ['chemicals', 'Chemicals'],
   ['sources', 'Sources'],
-  ['review', 'Review Queue'],
+  ['reviews', 'Review Queue'],
 ]
 
-const ISSUE_TABLES = {
-  disease: { table: 'diseases', label: 'Disease' },
-  pest: { table: 'pests', label: 'Pest' },
-  weed: { table: 'weeds', label: 'Weed' },
+const issueTabs = [
+  ['diseases', 'Diseases'],
+  ['pests', 'Pests'],
+  ['weeds', 'Weeds'],
+]
+
+function Field({ label, value, onChange, type = 'text', placeholder = '' }) {
+  return (
+    <label className="admin-field">
+      <span>{label}</span>
+      {type === 'textarea' ? (
+        <textarea value={value ?? ''} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} rows={4} />
+      ) : (
+        <input type={type} value={value ?? ''} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} />
+      )}
+    </label>
+  )
+}
+
+function SectionHeader({ title, subtitle, action }) {
+  return (
+    <div className="admin-section-header">
+      <div><div className="admin-kicker">ADMIN CMS</div><h2>{title}</h2><p>{subtitle}</p></div>
+      {action}
+    </div>
+  )
 }
 
 export default function AdminDashboard() {
-  const [tab, setTab] = useState('overview')
-  const [refreshKey, setRefreshKey] = useState(0)
-  const refresh = () => setRefreshKey((value) => value + 1)
+  const [active, setActive] = useState('overview')
+  const [counts, setCounts] = useState({})
+  const [reloadKey, setReloadKey] = useState(0)
+
+  const refresh = () => setReloadKey((v) => v + 1)
 
   return (
     <section className="admin-page">
-      <div className="admin-header">
-        <div>
-          <span className="step-label">SECURE CMS</span>
-          <h1>CropCare AI Admin</h1>
-          <p>Source-backed agriculture data management. Database RLS enforces admin access.</p>
+      <div className="admin-layout">
+        <aside className="admin-sidebar">
+          <div className="admin-brand"><div className="admin-logo">🌱</div><div><strong>CropCare CMS</strong><span>Data Management</span></div></div>
+          <nav className="admin-nav" aria-label="Admin sections">
+            {sections.map(([key, label]) => <button key={key} className={active === key ? 'active' : ''} onClick={() => setActive(key)}>{label}</button>)}
+          </nav>
+        </aside>
+        <div className="admin-main">
+          <div className="admin-topbar"><div><span className="admin-status-dot" /> Admin mode</div><button className="admin-refresh" onClick={refresh}>Refresh</button></div>
+          {active === 'overview' && <Overview refreshKey={reloadKey} setCounts={setCounts} counts={counts} />}
+          {active === 'crops' && <CropsManager onChanged={refresh} />}
+          {active === 'stages' && <StagesManager onChanged={refresh} />}
+          {active === 'issues' && <IssuesManager onChanged={refresh} />}
+          {active === 'fertilizers' && <SimpleManager key={reloadKey} table="fertilizers" title="Fertilizers" fields={[['name', 'Name'], ['nutrient_type', 'Nutrient type'], ['npk_ratio', 'NPK ratio'], ['description', 'Description']] } onChanged={refresh} />}
+          {active === 'chemicals' && <SimpleManager key={reloadKey} table="chemicals" title="Chemicals" fields={[['name', 'Name'], ['active_ingredient', 'Active ingredient'], ['chemical_type', 'Type'], ['formulation', 'Formulation'], ['description', 'Description']] } onChanged={refresh} />}
+          {active === 'sources' && <SourcesManager onChanged={refresh} />}
+          {active === 'reviews' && <ReviewQueue />}
         </div>
-        <span className="admin-status">Admin CMS</span>
       </div>
-
-      <nav className="admin-tabs" aria-label="Admin sections">
-        {TABS.map(([value, label]) => (
-          <button type="button" key={value} className={tab === value ? 'admin-tab active' : 'admin-tab'} onClick={() => setTab(value)}>
-            {label}
-          </button>
-        ))}
-      </nav>
-
-      {tab === 'overview' && <Overview refreshKey={refreshKey} />}
-      {tab === 'crops' && <CropsManager refresh={refresh} />}
-      {tab === 'issues' && <IssuesManager refresh={refresh} />}
-      {tab === 'inputs' && <InputsManager refresh={refresh} />}
-      {tab === 'sources' && <SourcesManager refresh={refresh} />}
-      {tab === 'review' && <ReviewQueue refresh={refresh} />}
     </section>
   )
 }
 
-function useCount(table, refreshKey = 0) {
-  const [state, setState] = useState({ count: 0, error: '' })
+function Overview({ setCounts, counts }) {
+  const tables = useMemo(() => [
+    ['crops', 'Crops'], ['crop_stages', 'Stages'], ['diseases', 'Diseases'], ['pests', 'Pests'], ['weeds', 'Weeds'],
+    ['fertilizers', 'Fertilizers'], ['chemicals', 'Chemicals'], ['source_claims', 'Claims'], ['advisory_review_queue', 'Pending Reviews'], ['advisory_rules', 'Rules'],
+  ], [])
   useEffect(() => {
-    let active = true
-    supabase.from(table).select('*', { count: 'exact', head: true }).then(({ count, error }) => {
-      if (!active) return
-      setState({ count: count ?? 0, error: error?.message ?? '' })
-    })
-    return () => { active = false }
-  }, [table, refreshKey])
-  return state
+    let cancelled = false
+    async function load() {
+      const next = {}
+      await Promise.all(tables.map(async ([table]) => {
+        const { count, error } = await supabase.from(table).select('*', { count: 'exact', head: true })
+        if (!error) next[table] = count ?? 0
+      }))
+      if (!cancelled) setCounts(next)
+    }
+    load()
+    return () => { cancelled = true }
+  }, [setCounts, tables])
+
+  return <div>
+    <SectionHeader title="Database overview" subtitle="Manage source-backed agriculture data without bypassing database RLS." />
+    <div className="admin-stat-grid">{tables.map(([key, label]) => <article className="admin-stat" key={key}><span>{label}</span><strong>{counts[key] ?? '—'}</strong></article>)}</div>
+    <div className="admin-panel"><h3>Publication safety</h3><p>Only verified/approved records should reach the farmer API. Creating or editing master data here does not auto-publish an advisory.</p></div>
+  </div>
 }
 
-function Overview({ refreshKey }) {
-  const cards = [
-    ['crops', 'Crops'], ['diseases', 'Diseases'], ['pests', 'Pests'], ['weeds', 'Weeds'],
-    ['fertilizers', 'Fertilizers'], ['chemicals', 'Chemicals'], ['sources', 'Sources'],
-    ['advisory_rules', 'Advisory Rules'], ['source_claims', 'Source Claims'], ['advisory_review_queue', 'Review Queue'],
-  ]
-  return <div className="admin-grid">{cards.map(([table, label]) => <CountCard key={table} table={table} label={label} refreshKey={refreshKey} />)}</div>
-}
-
-function CountCard({ table, label, refreshKey }) {
-  const { count, error } = useCount(table, refreshKey)
-  return <article className="admin-card"><span>{label}</span><strong>{error ? '!' : count}</strong>{error && <small>{error}</small>}</article>
-}
-
-function CropsManager({ refresh }) {
+function CropsManager({ onChanged }) {
   const [rows, setRows] = useState([])
   const [form, setForm] = useState({ name_en: '', name_hi: '', scientific_name: '', crop_category: '', season: '' })
+  const [editingId, setEditingId] = useState(null)
   const [error, setError] = useState('')
-  const load = async () => { const { data, error } = await supabase.from('crops').select('id,name_en,name_hi,scientific_name,crop_category,season').order('name_en'); setRows(data ?? []); setError(error?.message ?? '') }
-  useEffect(() => { load() }, [])
-  async function addCrop(e) {
-    e.preventDefault(); setError('')
-    const { error } = await supabase.from('crops').insert(form)
-    if (error) setError(error.message); else { setForm({ name_en: '', name_hi: '', scientific_name: '', crop_category: '', season: '' }); await load(); refresh() }
-  }
-  return <div className="cms-section">
-    <SectionTitle title="Crops" subtitle="Add or review crop master records." />
-    <form className="cms-form" onSubmit={addCrop}>{['name_en','name_hi','scientific_name','crop_category','season'].map((key) => <input key={key} value={form[key]} required={key === 'name_en'} onChange={(e) => setForm({ ...form, [key]: e.target.value })} placeholder={key.replaceAll('_', ' ')} />)}<button className="primary-action" type="submit">Add crop</button></form>
-    {error && <div className="error-state"><span>{error}</span></div>}
-    <div className="cms-table">{rows.map((row) => <div className="cms-row" key={row.id}><div><strong>{row.name_en}</strong><span>{row.name_hi || '—'} · {row.scientific_name || 'Scientific name pending'}</span></div><span>{row.season || '—'}</span></div>)}</div>
-  </div>
-}
-
-function IssuesManager({ refresh }) {
-  const [type, setType] = useState('disease')
-  const [cropId, setCropId] = useState('')
-  const [crops, setCrops] = useState([])
-  const [rows, setRows] = useState([])
-  const [form, setForm] = useState({ name_en: '', name_hi: '', scientific_name: '', symptoms: '', description: '' })
-  const [error, setError] = useState('')
-  useEffect(() => { supabase.from('crops').select('id,name_en,name_hi').order('name_en').then(({ data }) => { setCrops(data ?? []); if (!cropId && data?.[0]?.id) setCropId(data[0].id) }) }, [])
-  const config = ISSUE_TABLES[type]
-  async function load() {
-    if (!cropId) return
-    const { data, error } = await supabase.from(config.table).select('id,crop_id,name_en,name_hi,scientific_name,verification_status').eq('crop_id', cropId).order('name_en')
-    setRows(data ?? []); setError(error?.message ?? '')
-  }
-  useEffect(() => { load() }, [type, cropId])
-  async function addIssue(e) {
-    e.preventDefault(); setError('')
-    const payload = { crop_id: cropId, name_en: form.name_en, name_hi: form.name_hi || null, scientific_name: form.scientific_name || null, verification_status: 'pending', validation_status: 'draft' }
-    if (type === 'disease') payload.symptoms = form.symptoms || null
-    if (type === 'weed') payload.description = form.description || null
-    const { error } = await supabase.from(config.table).insert(payload)
-    if (error) setError(error.message); else { setForm({ name_en: '', name_hi: '', scientific_name: '', symptoms: '', description: '' }); await load(); refresh() }
-  }
-  return <div className="cms-section">
-    <SectionTitle title="Issues" subtitle="Disease, pest and weed master records." />
-    <div className="cms-toolbar"><select value={type} onChange={(e) => setType(e.target.value)}>{Object.entries(ISSUE_TABLES).map(([key, item]) => <option key={key} value={key}>{item.label}</option>)}</select><select value={cropId} onChange={(e) => setCropId(e.target.value)}>{crops.map((crop) => <option key={crop.id} value={crop.id}>{crop.name_en}</option>)}</select></div>
-    <form className="cms-form" onSubmit={addIssue}><input required value={form.name_en} onChange={(e) => setForm({ ...form, name_en: e.target.value })} placeholder="name en" /><input value={form.name_hi} onChange={(e) => setForm({ ...form, name_hi: e.target.value })} placeholder="name hi" /><input value={form.scientific_name} onChange={(e) => setForm({ ...form, scientific_name: e.target.value })} placeholder="scientific name" />{type === 'disease' && <input value={form.symptoms} onChange={(e) => setForm({ ...form, symptoms: e.target.value })} placeholder="symptoms" />}{type === 'weed' && <input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder="description" />}<button className="primary-action" type="submit">Add {config.label.toLowerCase()}</button></form>
-    {error && <div className="error-state"><span>{error}</span></div>}
-    <div className="cms-table">{rows.map((row) => <div className="cms-row" key={row.id}><div><strong>{row.name_en}</strong><span>{row.name_hi || '—'} · {row.scientific_name || 'Scientific name pending'}</span></div><span>{row.verification_status || 'pending'}</span></div>)}</div>
-  </div>
-}
-
-function InputsManager({ refresh }) {
-  const [tab, setTab] = useState('fertilizer')
-  const [rows, setRows] = useState([])
-  const [form, setForm] = useState({ name: '', active_ingredient: '', chemical_type: 'fungicide', formulation: '', nutrient_type: '', npk_ratio: '' })
-  const [error, setError] = useState('')
-  const table = tab === 'fertilizer' ? 'fertilizers' : 'chemicals'
-  async function load() { const { data, error } = await supabase.from(table).select(tab === 'fertilizer' ? 'id,name,nutrient_type,npk_ratio,verification_status' : 'id,name,active_ingredient,chemical_type,formulation,verification_status').order('name'); setRows(data ?? []); setError(error?.message ?? '') }
-  useEffect(() => { load() }, [tab])
-  async function add(e) {
-    e.preventDefault(); setError('')
-    const payload = tab === 'fertilizer' ? { name: form.name, nutrient_type: form.nutrient_type || null, npk_ratio: form.npk_ratio || null, verification_status: 'pending' } : { name: form.name, active_ingredient: form.active_ingredient || null, chemical_type: form.chemical_type, formulation: form.formulation || null, verification_status: 'pending' }
-    const { error } = await supabase.from(table).insert(payload)
-    if (error) setError(error.message); else { setForm({ name: '', active_ingredient: '', chemical_type: 'fungicide', formulation: '', nutrient_type: '', npk_ratio: '' }); await load(); refresh() }
-  }
-  return <div className="cms-section">
-    <SectionTitle title="Fertilizer & Chemicals" subtitle="Create master records only; keep new entries pending until verified." />
-    <div className="cms-toolbar"><button type="button" className={tab === 'fertilizer' ? 'admin-tab active' : 'admin-tab'} onClick={() => setTab('fertilizer')}>Fertilizers</button><button type="button" className={tab === 'chemical' ? 'admin-tab active' : 'admin-tab'} onClick={() => setTab('chemical')}>Chemicals</button></div>
-    <form className="cms-form" onSubmit={add}><input required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="name" />{tab === 'chemical' ? <><input value={form.active_ingredient} onChange={(e) => setForm({ ...form, active_ingredient: e.target.value })} placeholder="active ingredient" /><select value={form.chemical_type} onChange={(e) => setForm({ ...form, chemical_type: e.target.value })}><option value="fungicide">Fungicide</option><option value="insecticide">Insecticide</option><option value="herbicide">Herbicide</option><option value="other">Other</option></select><input value={form.formulation} onChange={(e) => setForm({ ...form, formulation: e.target.value })} placeholder="formulation" /></> : <><input value={form.nutrient_type} onChange={(e) => setForm({ ...form, nutrient_type: e.target.value })} placeholder="nutrient type" /><input value={form.npk_ratio} onChange={(e) => setForm({ ...form, npk_ratio: e.target.value })} placeholder="NPK ratio" /></>}<button className="primary-action" type="submit">Add record</button></form>
-    {error && <div className="error-state"><span>{error}</span></div>}
-    <div className="cms-table">{rows.map((row) => <div className="cms-row" key={row.id}><div><strong>{row.name}</strong><span>{row.active_ingredient || row.nutrient_type || '—'}{row.formulation ? ` · ${row.formulation}` : ''}</span></div><span>{row.verification_status || 'pending'}</span></div>)}</div>
-  </div>
-}
-
-function SourcesManager({ refresh }) {
-  const [rows, setRows] = useState([])
-  const [form, setForm] = useState({ source_name: '', source_type: '', source_url: '', license_type: '', trust_score: '5', description: '' })
-  const [error, setError] = useState('')
-  async function load() { const { data, error } = await supabase.from('sources').select('id,source_name,source_type,source_url,license_type,trust_score,verification_status,is_active').order('source_name'); setRows(data ?? []); setError(error?.message ?? '') }
-  useEffect(() => { load() }, [])
-  async function add(e) { e.preventDefault(); setError(''); const { error } = await supabase.from('sources').insert({ ...form, trust_score: Number(form.trust_score) || 5, verification_status: 'pending', is_active: true }); if (error) setError(error.message); else { setForm({ source_name: '', source_type: '', source_url: '', license_type: '', trust_score: '5', description: '' }); await load(); refresh() } }
-  return <div className="cms-section">
-    <SectionTitle title="Sources" subtitle="Register traceable data sources. Source verification stays separate." />
-    <form className="cms-form" onSubmit={add}><input required value={form.source_name} onChange={(e) => setForm({ ...form, source_name: e.target.value })} placeholder="source name" /><input value={form.source_type} onChange={(e) => setForm({ ...form, source_type: e.target.value })} placeholder="source type" /><input type="url" value={form.source_url} onChange={(e) => setForm({ ...form, source_url: e.target.value })} placeholder="source URL" /><input value={form.license_type} onChange={(e) => setForm({ ...form, license_type: e.target.value })} placeholder="license" /><input type="number" min="1" max="10" value={form.trust_score} onChange={(e) => setForm({ ...form, trust_score: e.target.value })} placeholder="trust score" /><button className="primary-action" type="submit">Add source</button></form>
-    {error && <div className="error-state"><span>{error}</span></div>}
-    <div className="cms-table">{rows.map((row) => <div className="cms-row" key={row.id}><div><strong>{row.source_name}</strong><span>{row.source_type || '—'} · {row.source_url || 'No URL'}</span></div><span>{row.verification_status || 'pending'}</span></div>)}</div>
-  </div>
-}
-
-function ReviewQueue({ refresh }) {
-  const [rows, setRows] = useState([])
-  const [error, setError] = useState('')
-  const [busy, setBusy] = useState(null)
-  async function load() {
-    const { data, error } = await supabase.from('advisory_review_queue').select('id,source_claim_id,chemical_match_candidate_id,regulatory_evidence_record_id,review_status,reviewer_notes,created_at').order('created_at', { ascending: true })
-    setRows(data ?? []); setError(error?.message ?? '')
+  const load = async () => {
+    const { data, error: qError } = await supabase.from('crops').select('id,name_en,name_hi,scientific_name,crop_category,season').order('name_en')
+    if (qError) setError(qError.message); else setRows(data ?? [])
   }
   useEffect(() => { load() }, [])
-  async function review(row, status) {
-    setBusy(row.id); setError('')
-    const { error } = await supabase.rpc('review_advisory_claim', { p_queue_id: row.id, p_new_status: status, p_notes: `Admin CMS action: ${status}` })
-    if (error) setError(error.message); else { await load(); refresh() }
-    setBusy(null)
+  const save = async (e) => {
+    e.preventDefault(); setError('')
+    const payload = { ...form }
+    const result = editingId ? await supabase.from('crops').update(payload).eq('id', editingId) : await supabase.from('crops').insert(payload)
+    if (result.error) return setError(result.error.message)
+    setForm({ name_en: '', name_hi: '', scientific_name: '', crop_category: '', season: '' }); setEditingId(null); await load(); onChanged()
   }
-  return <div className="cms-section">
-    <SectionTitle title="Advisory Review Queue" subtitle="Approval actions are database-gated and audited. No automatic pesticide approval occurs." />
-    {error && <div className="error-state"><span>{error}</span></div>}
-    <div className="cms-table">{rows.length === 0 && <div className="empty-state"><h3>No review items</h3><p>The queue is empty.</p></div>}{rows.map((row) => <div className="review-row" key={row.id}><div><strong>Claim #{row.source_claim_id}</strong><span>Status: {row.review_status}</span><small>Created {new Date(row.created_at).toLocaleString()}</small></div><div className="review-actions"><button type="button" disabled={busy === row.id} onClick={() => review(row, 'approved')}>Approve</button><button type="button" disabled={busy === row.id} onClick={() => review(row, 'rejected')}>Reject</button><button type="button" disabled={busy === row.id} onClick={() => review(row, 'needs_more_evidence')}>Need evidence</button></div></div>)}</div>
+  const deactivate = async (id) => {
+    setError('')
+    const { error: qError } = await supabase.from('crops').update({ active: false }).eq('id', id)
+    if (qError) setError(qError.message); else { await load(); onChanged() }
+  }
+  return <div><SectionHeader title="Crops" subtitle="Add, edit and deactivate crop master records." />
+    <form className="admin-form-grid" onSubmit={save}>{Object.entries({ name_en: 'English name', name_hi: 'Hindi name', scientific_name: 'Scientific name', crop_category: 'Category', season: 'Season' }).map(([k,l]) => <Field key={k} label={l} value={form[k]} onChange={(v) => setForm({ ...form, [k]: v })} required={false} />)}<div className="admin-actions"><button className="admin-primary" type="submit">{editingId ? 'Update crop' : 'Add crop'}</button>{editingId && <button type="button" className="admin-secondary" onClick={() => { setEditingId(null); setForm({ name_en: '', name_hi: '', scientific_name: '', crop_category: '', season: '' }) }}>Cancel</button>}</div></form>
+    {error && <div className="admin-error">{error}</div>}
+    <div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>Crop</th><th>Hindi</th><th>Scientific</th><th>Category</th><th>Season</th><th>Actions</th></tr></thead><tbody>{rows.map((r) => <tr key={r.id}><td>{r.name_en}</td><td>{r.name_hi || '—'}</td><td>{r.scientific_name || '—'}</td><td>{r.crop_category || '—'}</td><td>{r.season || '—'}</td><td><button onClick={() => { setEditingId(r.id); setForm({ name_en:r.name_en||'', name_hi:r.name_hi||'', scientific_name:r.scientific_name||'', crop_category:r.crop_category||'', season:r.season||'' }) }}>Edit</button><button className="danger" onClick={() => deactivate(r.id)}>Deactivate</button></td></tr>)}</tbody></table></div>
   </div>
 }
 
-function SectionTitle({ title, subtitle }) { return <div className="cms-title"><div><span className="step-label">CMS</span><h2>{title}</h2><p>{subtitle}</p></div></div> }
+function StagesManager({ onChanged }) {
+  const [crops, setCrops] = useState([]); const [rows, setRows] = useState([]); const [form, setForm] = useState({ crop_id: '', stage_name_en: '', stage_name_hi: '', stage_order: 1 }); const [error, setError] = useState('')
+  useEffect(() => { supabase.from('crops').select('id,name_en').order('name_en').then(({data}) => setCrops(data ?? [])); load() }, [])
+  async function load() { const { data, error: qError } = await supabase.from('crop_stages').select('id,crop_id,stage_name_en,stage_name_hi,stage_order').order('stage_order'); if (qError) setError(qError.message); else setRows(data ?? []) }
+  async function save(e) { e.preventDefault(); setError(''); const { error: qError } = await supabase.from('crop_stages').insert({ ...form, stage_order: Number(form.stage_order) }); if (qError) setError(qError.message); else { setForm({ crop_id:'', stage_name_en:'', stage_name_hi:'', stage_order:1 }); await load(); onChanged() } }
+  return <div><SectionHeader title="Crop stages" subtitle="Maintain crop-stage reference data used by the advisory engine." /><form className="admin-form-grid" onSubmit={save}><label className="admin-field"><span>Crop</span><select value={form.crop_id} onChange={(e)=>setForm({...form,crop_id:e.target.value})} required><option value="">Choose crop</option>{crops.map(c=><option key={c.id} value={c.id}>{c.name_en}</option>)}</select></label><Field label="Stage name (English)" value={form.stage_name_en} onChange={(v)=>setForm({...form,stage_name_en:v})}/><Field label="Stage name (Hindi)" value={form.stage_name_hi} onChange={(v)=>setForm({...form,stage_name_hi:v})}/><Field label="Order" type="number" value={form.stage_order} onChange={(v)=>setForm({...form,stage_order:v})}/><div className="admin-actions"><button className="admin-primary">Add stage</button></div></form>{error&&<div className="admin-error">{error}</div>}<div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>Crop</th><th>Stage</th><th>Hindi</th><th>Order</th></tr></thead><tbody>{rows.map(r=><tr key={r.id}><td>{crops.find(c=>String(c.id)===String(r.crop_id))?.name_en || r.crop_id}</td><td>{r.stage_name_en}</td><td>{r.stage_name_hi || '—'}</td><td>{r.stage_order}</td></tr>)}</tbody></table></div></div>
+}
+
+function IssuesManager({ onChanged }) {
+  const [activeTab,setActiveTab] = useState('diseases'); const [rows,setRows]=useState([]); const [crops,setCrops]=useState([]); const [form,setForm]=useState({crop_id:'',name_en:'',name_hi:'',scientific_name:'',symptoms:'',description:''}); const [error,setError]=useState('')
+  useEffect(()=>{supabase.from('crops').select('id,name_en').order('name_en').then(({data})=>setCrops(data??[])); load()},[activeTab])
+  async function load(){const {data,error:qError}=await supabase.from(activeTab).select('id,crop_id,name_en,name_hi,scientific_name,symptoms,description,verification_status').order('name_en'); if(qError)setError(qError.message);else setRows(data??[])}
+  async function save(e){e.preventDefault();setError('');const {error:qError}=await supabase.from(activeTab).insert({...form,verification_status:'pending',validation_status:'pending'});if(qError)setError(qError.message);else{setForm({crop_id:'',name_en:'',name_hi:'',scientific_name:'',symptoms:'',description:''});await load();onChanged()}}
+  return <div><SectionHeader title="Issue master" subtitle="Maintain disease, pest and weed reference records. New records stay unverified." /><div className="admin-tabs">{issueTabs.map(([k,l])=><button className={activeTab===k?'active':''} key={k} onClick={()=>setActiveTab(k)}>{l}</button>)}</div><form className="admin-form-grid" onSubmit={save}><label className="admin-field"><span>Crop</span><select value={form.crop_id} onChange={(e)=>setForm({...form,crop_id:e.target.value})} required><option value="">Choose crop</option>{crops.map(c=><option key={c.id} value={c.id}>{c.name_en}</option>)}</select></label><Field label="English name" value={form.name_en} onChange={(v)=>setForm({...form,name_en:v})}/><Field label="Hindi name" value={form.name_hi} onChange={(v)=>setForm({...form,name_hi:v})}/><Field label="Scientific name" value={form.scientific_name} onChange={(v)=>setForm({...form,scientific_name:v})}/><Field label="Symptoms / description" type="textarea" value={form.symptoms} onChange={(v)=>setForm({...form,symptoms:v})}/><div className="admin-actions"><button className="admin-primary">Add {activeTab.slice(0,-1)}</button></div></form>{error&&<div className="admin-error">{error}</div>}<div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>Crop</th><th>Name</th><th>Scientific</th><th>Status</th></tr></thead><tbody>{rows.map(r=><tr key={r.id}><td>{crops.find(c=>String(c.id)===String(r.crop_id))?.name_en || r.crop_id}</td><td>{r.name_en}</td><td>{r.scientific_name||'—'}</td><td><span className="status-pill">{r.verification_status||'pending'}</span></td></tr>)}</tbody></table></div></div>
+}
+
+function SimpleManager({ table, title, fields, onChanged }) {
+  const [rows,setRows]=useState([]); const [form,setForm]=useState({}); const [error,setError]=useState('')
+  useEffect(()=>{load()},[table]); async function load(){const {data,error:qError}=await supabase.from(table).select('*').order('created_at',{ascending:false}).limit(100);if(qError)setError(qError.message);else setRows(data??[])}
+  async function save(e){e.preventDefault();setError('');const {error:qError}=await supabase.from(table).insert(form);if(qError)setError(qError.message);else{setForm({});await load();onChanged()}}
+  return <div><SectionHeader title={title} subtitle={`Manage ${title.toLowerCase()} without bypassing database validation.`}/><form className="admin-form-grid">{fields.map(([k,l])=><Field key={k} label={l} type={k==='description'?'textarea':'text'} value={form[k]||''} onChange={(v)=>setForm({...form,[k]:v})}/>)}<div className="admin-actions"><button className="admin-primary" type="button" onClick={save}>Add record</button></div></form>{error&&<div className="admin-error">{error}</div>}<div className="admin-table-wrap"><table className="admin-table"><thead><tr>{fields.map(([k,l])=><th key={k}>{l}</th>)}<th>Status</th></tr></thead><tbody>{rows.map(r=><tr key={r.id}>{fields.map(([k])=><td key={k}>{String(r[k] ?? '—')}</td>)}<td><span className="status-pill">{r.verification_status||'pending'}</span></td></tr>)}</tbody></table></div></div>
+}
+
+function SourcesManager({ onChanged }) {
+  const [rows,setRows]=useState([]); const [form,setForm]=useState({source_name:'',source_url:'',source_type:'',license_type:'',description:''}); const [error,setError]=useState('')
+  useEffect(()=>{load()},[]); async function load(){const {data,error:qError}=await supabase.from('sources').select('id,source_name,source_url,source_type,license_type,verification_status').order('source_name');if(qError)setError(qError.message);else setRows(data??[])}
+  async function save(e){e.preventDefault();setError('');const {error:qError}=await supabase.from('sources').insert({...form,verification_status:'pending',is_active:true});if(qError)setError(qError.message);else{setForm({source_name:'',source_url:'',source_type:'',license_type:'',description:''});await load();onChanged()}}
+  return <div><SectionHeader title="Sources" subtitle="Register authoritative documents and source metadata."/><form className="admin-form-grid">{Object.entries({source_name:'Source name',source_url:'URL',source_type:'Source type',license_type:'License',description:'Description'}).map(([k,l])=><Field key={k} label={l} type={k==='description'?'textarea':'text'} value={form[k]} onChange={(v)=>setForm({...form,[k]:v})}/>)}<div className="admin-actions"><button type="button" className="admin-primary" onClick={save}>Add source</button></div></form>{error&&<div className="admin-error">{error}</div>}<div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>Source</th><th>Type</th><th>URL</th><th>License</th><th>Status</th></tr></thead><tbody>{rows.map(r=><tr key={r.id}><td>{r.source_name}</td><td>{r.source_type||'—'}</td><td>{r.source_url||'—'}</td><td>{r.license_type||'—'}</td><td><span className="status-pill">{r.verification_status||'pending'}</span></td></tr>)}</tbody></table></div></div>
+}
+
+function ReviewQueue() {
+  const [rows,setRows]=useState([]); const [error,setError]=useState(''); const [busy,setBusy]=useState(null)
+  const load=async()=>{const {data,error:qError}=await supabase.from('advisory_review_queue').select('id,source_claim_id,chemical_match_candidate_id,regulatory_evidence_record_id,review_status,reviewer_notes,created_at').order('created_at',{ascending:false});if(qError)setError(qError.message);else setRows(data??[])}
+  useEffect(()=>{load()},[])
+  async function decide(id,status){setBusy(id);setError('');const {data:result,error:qError}=await supabase.rpc('review_advisory_claim',{p_queue_id:id,p_new_status:status,p_notes:`CMS action: ${status}`});if(qError)setError(qError.message);else if(!result) setError('Review action was not applied.');await load();setBusy(null)}
+  return <div><SectionHeader title="Review Queue" subtitle="Review source claims before they can become farmer-facing advisory rules." />{error&&<div className="admin-error">{error}</div>}<div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>ID</th><th>Claim</th><th>Chemical match</th><th>Regulatory evidence</th><th>Status</th><th>Decision</th></tr></thead><tbody>{rows.map(r=><tr key={r.id}><td>{r.id}</td><td>{r.source_claim_id}</td><td>{r.chemical_match_candidate_id||'—'}</td><td>{r.regulatory_evidence_record_id||'—'}</td><td><span className="status-pill">{r.review_status}</span></td><td><div className="row-actions"><button disabled={busy===r.id} onClick={()=>decide(r.id,'approved')}>Approve</button><button disabled={busy===r.id} onClick={()=>decide(r.id,'needs_more_evidence')}>Need evidence</button><button disabled={busy===r.id} className="danger" onClick={()=>decide(r.id,'rejected')}>Reject</button></div></td></tr>)}</tbody></table></div></div>
+}
