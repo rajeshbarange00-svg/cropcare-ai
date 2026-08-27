@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@supabase/supabase-js'
+import { getAdvisory } from './lib/advisoryApi'
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
@@ -94,89 +95,57 @@ function App() {
 
     setLoadingAdvisory(true)
 
-    let query = supabase
-      .from('advisories')
-      .select('id,crop_id,issue_type,title,description,crop_stage_id,state,district,source_id,trust_score,verification_status,verified_at,recommendation_basis,regulatory_basis,safety_notes,evidence_url,last_reviewed_at')
-      .eq('crop_id', cropId)
-      .eq('issue_type', issueType)
-      .eq('verification_status', 'verified')
+    try {
+      if (!selectedCrop?.name_en) throw new Error('Selected crop could not be resolved.')
 
-    if (stageId) query = query.eq('crop_stage_id', stageId)
+      const data = await getAdvisory({
+        crop: selectedCrop.name_en,
+        issueType,
+        issueId,
+        stageId,
+      })
 
-    const { data: advisoryRows, error: advisoryError } = await query.order('trust_score', { ascending: false })
+      const results = (data?.results ?? []).map((rule) => ({
+        ...rule,
+        id: rule.id,
+        title: language === 'hi'
+          ? (rule.recommendation_text_hi || rule.recommendation_text_en || `${issueType} advisory`)
+          : (rule.recommendation_text_en || rule.recommendation_text_hi || `${issueType} advisory`),
+        description: language === 'hi'
+          ? (rule.recommendation_text_hi || rule.recommendation_text_en || '')
+          : (rule.recommendation_text_en || rule.recommendation_text_hi || ''),
+        trust_score: rule.evidence_level ?? '—',
+        verification_status: rule.verification_status,
+        applications: rule.chemical || rule.fertilizer
+          ? [{
+              id: `rule-${rule.id}`,
+              chemical: rule.chemical,
+              fertilizer: rule.fertilizer,
+              dose: rule.dose,
+              dose_unit: rule.dose_unit,
+              application_method: rule.application_method,
+              spray_timing: rule.application_timing,
+              waiting_period: rule.waiting_period,
+              safety_note: rule.safety_note,
+            }]
+          : [],
+        source: rule.source,
+        evidence_url: rule.source?.source_url,
+      }))
 
-    if (advisoryError) {
-      setError(advisoryError.message)
+      setAdvisories(results)
+    } catch (queryError) {
+      const message = queryError?.message || 'Unable to load verified advisory.'
+      if (/401|jwt|unauthorized/i.test(message)) {
+        setError(language === 'hi'
+          ? 'Verified advisory API के लिए Supabase login/session जरूरी है।'
+          : 'A Supabase login/session is required for the verified advisory API.')
+      } else {
+        setError(message)
+      }
+    } finally {
       setLoadingAdvisory(false)
-      return
     }
-
-    const matches = []
-
-    for (const advisory of advisoryRows ?? []) {
-      const { data: targets, error: targetError } = await supabase
-        .from('advisory_targets')
-        .select('id,disease_id,pest_id,weed_id,fertilizer_id,notes')
-        .eq('advisory_id', advisory.id)
-
-      if (targetError) continue
-
-      const targetMatch = (targets ?? []).some((target) =>
-        (issueType === 'disease' && target.disease_id === issueId) ||
-        (issueType === 'pest' && target.pest_id === issueId) ||
-        (issueType === 'weed' && target.weed_id === issueId)
-      )
-
-      if (!targetMatch) continue
-
-      const { data: applications } = await supabase
-        .from('advisory_applications')
-        .select('id,chemical_id,fertilizer_id,dose,dose_unit,application_method,spray_timing,frequency,waiting_period,safety_note,notes')
-        .eq('advisory_id', advisory.id)
-
-      const applicationDetails = []
-      for (const application of applications ?? []) {
-        let chemical = null
-        let fertilizer = null
-
-        if (application.chemical_id) {
-          const { data } = await supabase
-            .from('chemicals')
-            .select('id,name,active_ingredient,chemical_type,formulation,verification_status')
-            .eq('id', application.chemical_id)
-            .eq('verification_status', 'verified')
-            .maybeSingle()
-          chemical = data
-        }
-
-        if (application.fertilizer_id) {
-          const { data } = await supabase
-            .from('fertilizers')
-            .select('id,name,nutrient_type,npk_ratio,verification_status')
-            .eq('id', application.fertilizer_id)
-            .eq('verification_status', 'verified')
-            .maybeSingle()
-          fertilizer = data
-        }
-
-        if (chemical || fertilizer) applicationDetails.push({ ...application, chemical, fertilizer })
-      }
-
-      let source = null
-      if (advisory.source_id) {
-        const { data } = await supabase
-          .from('sources')
-          .select('id,source_name,source_url,source_type,trust_score')
-          .eq('id', advisory.source_id)
-          .maybeSingle()
-        source = data
-      }
-
-      matches.push({ ...advisory, applications: applicationDetails, source })
-    }
-
-    setAdvisories(matches)
-    setLoadingAdvisory(false)
   }
 
   function handleCropChange(value) {
@@ -248,10 +217,10 @@ function App() {
         {searched && !loadingAdvisory && advisories.length === 0 && !error && issueType !== 'deficiency' && <div className="empty-state"><div className="empty-icon">🔎</div><h3>{language === 'hi' ? 'कोई approved advisory उपलब्ध नहीं है' : 'No approved advisory is currently available'}</h3><p>{language === 'hi' ? 'इस crop + issue combination के लिए verified source-backed record नहीं मिला। कोई recommendation invent नहीं की गई।' : 'No verified, source-backed record was found for this crop + issue combination. No recommendation was invented.'}</p></div>}
 
         {advisories.length > 0 && <section className="results-section"><div className="section-heading result-heading"><div><span className="step-label">VERIFIED RESULTS</span><h2>{language === 'hi' ? 'उपलब्ध Advisory' : 'Available advisories'}</h2></div><span className="result-count">{advisories.length}</span></div><div className="results-list">{advisories.map((advisory) => <article className="result-card" key={advisory.id}>
-          <div className="result-topline"><span className="verified-badge">✓ Verified</span><span className="trust-score">Trust {advisory.trust_score ?? '—'}/10</span></div>
+          <div className="result-topline"><span className="verified-badge">✓ Verified</span><span className="trust-score">{advisory.evidence_level ? `Evidence ${advisory.evidence_level}` : 'Verified'}</span></div>
           <h3>{advisory.title}</h3><p className="result-description">{advisory.description}</p>
           <div className="fact-grid"><Fact label="Crop" value={cropLabel(selectedCrop)} /><Fact label="Stage" value={stageLabel(selectedStage) || '—'} /><Fact label="Issue" value={issueLabel(selectedIssue)} /><Fact label="Issue type" value={issueType} /></div>
-          {advisory.applications?.map((application) => <div className="application-card" key={application.id}>{application.chemical && <><div className="application-title">{application.chemical.chemical_type}</div><Fact label="Active ingredient" value={application.chemical.active_ingredient || application.chemical.name} /><Fact label="Formulation" value={application.chemical.formulation || '—'} /></>}{application.fertilizer && <><div className="application-title">Fertilizer</div><Fact label="Product" value={application.fertilizer.name} /><Fact label="NPK" value={application.fertilizer.npk_ratio || '—'} /></>}{application.dose && <Fact label="Dose" value={application.dose_unit ? `${application.dose} ${application.dose_unit}` : application.dose} />}{application.application_method && <Fact label="Application method" value={application.application_method} />}{application.spray_timing && <Fact label="Timing" value={application.spray_timing} />}{application.waiting_period && <Fact label="Waiting period / PHI" value={application.waiting_period} />}{application.safety_note && <div className="safety-note">⚠ {application.safety_note}</div>}</div>)}
+          {advisory.applications?.map((application) => <div className="application-card" key={application.id}>{application.chemical && <><div className="application-title">{application.chemical.chemical_type}</div><Fact label="Active ingredient" value={application.chemical.active_ingredient || application.chemical.name} /><Fact label="Formulation" value={application.chemical.formulation || '—'} /></>}{application.fertilizer && <><div className="application-title">Fertilizer</div><Fact label="Product" value={application.fertilizer.name} /><Fact label="NPK" value={application.fertilizer.npk_ratio || `${application.fertilizer.nitrogen_percent ?? '—'}-${application.fertilizer.phosphorus_percent ?? '—'}-${application.fertilizer.potassium_percent ?? '—'}`} /></>}{application.dose && <Fact label="Dose" value={application.dose_unit ? `${application.dose} ${application.dose_unit}` : application.dose} />}{application.application_method && <Fact label="Application method" value={application.application_method} />}{application.spray_timing && <Fact label="Timing" value={application.spray_timing} />}{application.waiting_period && <Fact label="Waiting period / PHI" value={application.waiting_period} />}{application.safety_note && <div className="safety-note">⚠ {application.safety_note}</div>}</div>)}
           <div className="source-row"><div><span className="source-label">Source</span><strong>{advisory.source?.source_name || '—'}</strong></div>{advisory.evidence_url && <a href={advisory.evidence_url} target="_blank" rel="noreferrer">View evidence ↗</a>}</div>
         </article>)}</div></section>}
 
